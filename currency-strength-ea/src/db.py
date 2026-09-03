@@ -124,6 +124,21 @@ def insert_spread_sample(
     conn.commit()
 
 
+def insert_spread_samples(conn: sqlite3.Connection, rows: list[tuple]) -> int:
+    """rows: tuplas (symbol_id, ts_utc, session, bid, ask, spread_points).
+
+    Uma transação para o ciclo inteiro (os 28 pares), em vez de um commit por
+    par — reduz a contenção de lock quando o backfill de histórico está
+    escrevendo no mesmo arquivo em paralelo."""
+    conn.executemany(
+        "INSERT INTO spread_samples (symbol_id, ts_utc, session, bid, ask, spread_points) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
 def delete_data_gaps_for_symbol(conn: sqlite3.Connection, symbol_id: int) -> None:
     conn.execute("DELETE FROM data_gaps WHERE symbol_id = ?", (symbol_id,))
     conn.commit()
