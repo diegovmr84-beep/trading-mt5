@@ -34,6 +34,18 @@ from datetime import datetime, timezone
 _RECORD_FORMAT = ">3i2f"
 _RECORD_SIZE = struct.calcsize(_RECORD_FORMAT)
 
+# O datafeed da Dukascopy responde 429 (Too Many Requests) já na primeira
+# chamada quando o User-Agent é o padrão do `requests` (`python-requests/x`);
+# com um User-Agent de navegador responde 200 normalmente. Descoberto rodando
+# (não presumido): default -> 429, browser UA -> 200. Usado pelos dois scripts
+# que baixam da Dukascopy (dukascopy_smoke_test.py e download_history_dukascopy.py).
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
+}
+
 
 def point_divisor(pair: str) -> int:
     return 1000 if "JPY" in pair else 100000

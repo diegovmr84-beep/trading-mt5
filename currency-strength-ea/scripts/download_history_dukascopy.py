@@ -13,24 +13,30 @@ os preços saem plausíveis. A lógica de decodificação (src/dukascopy.py) nã
 pôde ser validada contra um arquivo real no ambiente onde foi escrita.
 
 Volume esperado: 28 pares × ~5-6 anos × 24 arquivos/dia ≈ 1.4-1.6 milhões de
-requisições HTTP pequenas. Com concorrência (--workers, default 12) e as
+requisições HTTP pequenas. Com concorrência (--workers, default 6) e as
 noites/fins de semana retornando corpo vazio rapidamente, uma estimativa
 grosseira é de algumas horas de execução — deixe rodando em background.
 É resumível: re-rodar pula pares/dias já cobertos no banco (a menos que
 --no-resume seja passado).
 
+O default de 6 workers é propositalmente conservador: a Dukascopy devolve
+429 (Too Many Requests) sob rajada. Se rodar estável por um bom tempo, dá
+para subir com --workers; se começar a ver muitos "AVISO: HTTP 429", baixe.
+
 Uso:
     python -m scripts.download_history_dukascopy
-    python -m scripts.download_history_dukascopy --pairs EURUSD,USDJPY --workers 20
+    python -m scripts.download_history_dukascopy --pairs EURUSD,USDJPY --workers 10
 """
 
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import requests
@@ -39,28 +45,74 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 from src import db
-from src.dukascopy import bi5_url, decode_bi5, hour_start_epoch, ticks_to_m5_candles
+from src.dukascopy import (
+    REQUEST_HEADERS,
+    bi5_url,
+    decode_bi5,
+    hour_start_epoch,
+    ticks_to_m5_candles,
+)
 from src.gaps import detect_and_log_gaps
 from src.pairs import split_pair
 
-MAX_RETRIES = 3
-RETRY_BACKOFF_SECONDS = 1.5
+MAX_RETRIES = 5
+RETRY_BACKOFF_SECONDS = 1.5  # erro de rede/timeout: backoff linear curto
+# 429 (Too Many Requests): a Dukascopy é sensível a rajada e pode devolver 429
+# em série. Backoff dedicado, exponencial e bem mais longo que o de erro de
+# rede — e respeitando o header Retry-After quando o servidor o manda.
+RATE_LIMIT_BACKOFF_SECONDS = 10.0
+RATE_LIMIT_BACKOFF_CAP_SECONDS = 120.0
+
+
+def _rate_limit_delay(resp: requests.Response, attempt: int) -> float:
+    """Segundos a esperar após um 429, priorizando o header Retry-After
+    (formato numérico ou data HTTP); sem ele, backoff exponencial com teto e
+    jitter (evita os workers baterem no limite de novo todos juntos)."""
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(1.0, float(retry_after))
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(retry_after)
+                delay = (when - datetime.now(timezone.utc)).total_seconds()
+                if delay > 0:
+                    return delay
+            except (TypeError, ValueError):
+                pass
+    backoff = min(RATE_LIMIT_BACKOFF_CAP_SECONDS, RATE_LIMIT_BACKOFF_SECONDS * (2 ** attempt))
+    return backoff + random.uniform(0, 3)
 
 
 def _fetch_hour(session: requests.Session, pair: str, dt_hour: datetime) -> bytes:
     url = bi5_url(pair, dt_hour)
-    last_exc: Exception | None = None
+    last_problem: object = None
     for attempt in range(MAX_RETRIES):
         try:
             resp = session.get(url, timeout=30)
-            if resp.status_code == 404:
-                return b""  # par/data sem arquivo — tratado como hora sem tick
-            resp.raise_for_status()
-            return resp.content
         except requests.RequestException as exc:
-            last_exc = exc
+            last_problem = exc
             time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
-    print(f"  AVISO: falha ao baixar {url} após {MAX_RETRIES} tentativas: {last_exc}", file=sys.stderr)
+            continue
+
+        if resp.status_code == 404:
+            return b""  # par/data sem arquivo — tratado como hora sem tick
+        if resp.status_code == 200:
+            return resp.content
+
+        last_problem = f"HTTP {resp.status_code}"
+        if resp.status_code == 429:
+            wait = _rate_limit_delay(resp, attempt)
+        else:
+            wait = RETRY_BACKOFF_SECONDS * (attempt + 1)
+        print(
+            f"  AVISO: {url} -> HTTP {resp.status_code}, aguardando {wait:.0f}s "
+            f"(tentativa {attempt + 1}/{MAX_RETRIES})",
+            file=sys.stderr,
+        )
+        time.sleep(wait)
+
+    print(f"  AVISO: falha ao baixar {url} após {MAX_RETRIES} tentativas: {last_problem}", file=sys.stderr)
     return b""
 
 
@@ -101,7 +153,7 @@ def main() -> None:
     parser.add_argument("--pairs", default=None, help="lista separada por vírgula (default: os 28 pares)")
     parser.add_argument("--start", default=config.HISTORY_START_UTC)
     parser.add_argument("--end", default=None, help="ISO 8601 (default: agora)")
-    parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--resume", dest="resume", action="store_true", default=True)
     parser.add_argument("--no-resume", dest="resume", action="store_false")
     args = parser.parse_args()
@@ -112,6 +164,7 @@ def main() -> None:
 
     conn = db.connect(config.DB_PATH)
     session = requests.Session()
+    session.headers.update(REQUEST_HEADERS)
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         for pair in pairs:

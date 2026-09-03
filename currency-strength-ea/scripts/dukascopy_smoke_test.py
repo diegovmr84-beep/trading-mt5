@@ -27,7 +27,13 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.dukascopy import bi5_url, decode_bi5, hour_start_epoch, ticks_to_m5_candles
+from src.dukascopy import (
+    REQUEST_HEADERS,
+    bi5_url,
+    decode_bi5,
+    hour_start_epoch,
+    ticks_to_m5_candles,
+)
 
 
 def main() -> None:
@@ -43,7 +49,7 @@ def main() -> None:
     url = bi5_url(args.pair, dt_hour)
     print(f"Baixando: {url}")
 
-    resp = requests.get(url, timeout=30)
+    resp = requests.get(url, headers=REQUEST_HEADERS, timeout=30)
     print(f"HTTP {resp.status_code}, {len(resp.content)} bytes")
 
     if resp.status_code == 404:
