@@ -1,7 +1,11 @@
 # MetaTrader5 só instala/funciona em Windows (binding para o terminal MT5).
-# Necessário apenas na máquina onde os scripts de coleta (download_history.py,
-# spread_sampler.py) forem de fato executados.
+# Necessário apenas para os scripts que falam com o MT5 (spread_sampler.py,
+# list_symbols.py, download_history.py).
 MetaTrader5
 
-# Testes (rodam em qualquer SO, não dependem do MetaTrader5)
+# Necessário para o download de histórico via Dukascopy (download_history_dukascopy.py,
+# dukascopy_smoke_test.py) — este caminho não depende de MT5/Windows.
+requests
+
+# Testes (rodam em qualquer SO, não dependem do MetaTrader5 nem de rede)
 pytest

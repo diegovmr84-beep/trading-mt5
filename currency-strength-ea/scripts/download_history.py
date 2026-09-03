@@ -20,10 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 from src import db
+from src.gaps import detect_and_log_gaps
 from src.mt5_connector import MT5ConnectionError, connect
 from src.pairs import split_pair
-
-EXPECTED_M5_SECONDS = 5 * 60
 
 
 def _iter_chunks(start: datetime, end: datetime, chunk_days: int):
@@ -32,31 +31,6 @@ def _iter_chunks(start: datetime, end: datetime, chunk_days: int):
         nxt = min(cur + timedelta(days=chunk_days), end)
         yield cur, nxt
         cur = nxt
-
-
-def _detect_gaps(rows: list[tuple], symbol_id: int, conn) -> int:
-    """rows ordenadas por ts_utc. Um "gap" aqui é qualquer intervalo entre
-    candles consecutivos maior que ~3x o período do M5 (tolerância para
-    fins de semana é tratada à parte, ver nota abaixo). Fins de semana são
-    esperados (mercado fechado) e não contam como gap de dado ruim."""
-    gaps_found = 0
-    for prev, cur in zip(rows, rows[1:]):
-        delta = cur[0] - prev[0]
-        if delta <= EXPECTED_M5_SECONDS:
-            continue
-        # Fecho de sexta ~21-22h UTC até abertura de domingo ~21-22h UTC é
-        # esperado; qualquer coisa MUITO maior que isso (~2.5 dias) em dia
-        # útil é suspeito e vale registrar para revisão manual.
-        if delta > timedelta(days=3).total_seconds():
-            db.insert_data_gap(
-                conn,
-                symbol_id,
-                prev[0],
-                cur[0],
-                note=f"gap de {delta/3600:.1f}h entre candles consecutivos",
-            )
-            gaps_found += 1
-    return gaps_found
 
 
 def main() -> None:
@@ -102,7 +76,8 @@ def main() -> None:
                     print(f"  {chunk_start.date()} -> {chunk_end.date()}: {len(rows)} candles")
 
                 all_rows.sort(key=lambda r: r[0])
-                gaps = _detect_gaps(all_rows, symbol_id, conn)
+                db.delete_data_gaps_for_symbol(conn, symbol_id)
+                gaps = detect_and_log_gaps(conn, symbol_id, all_rows)
                 print(f"  total: {len(all_rows)} candles | gaps suspeitos registrados: {gaps}")
 
     except MT5ConnectionError as exc:

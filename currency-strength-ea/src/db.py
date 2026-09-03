@@ -115,6 +115,11 @@ def insert_spread_sample(
     conn.commit()
 
 
+def delete_data_gaps_for_symbol(conn: sqlite3.Connection, symbol_id: int) -> None:
+    conn.execute("DELETE FROM data_gaps WHERE symbol_id = ?", (symbol_id,))
+    conn.commit()
+
+
 def insert_data_gap(
     conn: sqlite3.Connection, symbol_id: int, gap_start_utc: int, gap_end_utc: int, note: str = ""
 ) -> None:

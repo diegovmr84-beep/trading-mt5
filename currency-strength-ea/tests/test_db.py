@@ -56,3 +56,19 @@ def test_insert_spread_sample_and_gap(tmp_path):
     gap = conn.execute("SELECT note FROM data_gaps WHERE symbol_id = ?", (sid,)).fetchone()
     assert gap == ("teste",)
     conn.close()
+
+
+def test_delete_data_gaps_for_symbol(tmp_path):
+    conn = db.connect(tmp_path / "test.db")
+    sid = db.upsert_symbol(conn, "EURUSD", "EUR", "USD")
+    other_sid = db.upsert_symbol(conn, "USDJPY", "USD", "JPY")
+
+    db.insert_data_gap(conn, sid, 1, 2, note="a")
+    db.insert_data_gap(conn, sid, 3, 4, note="b")
+    db.insert_data_gap(conn, other_sid, 5, 6, note="c")
+
+    db.delete_data_gaps_for_symbol(conn, sid)
+
+    remaining = conn.execute("SELECT symbol_id, note FROM data_gaps").fetchall()
+    assert remaining == [(other_sid, "c")]
+    conn.close()
