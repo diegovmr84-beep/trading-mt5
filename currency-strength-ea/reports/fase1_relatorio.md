@@ -1,6 +1,17 @@
 # Relatório — Fase 1: Coleta de dados e levantamento de spread
 
-**Status: infraestrutura pronta e testada (26 testes); nenhum dado real coletado ainda.**
+**Status: infraestrutura pronta e testada (26 testes); smoke test da Dukascopy validado com dado
+real; backfill completo e amostragem de spread ainda pendentes.**
+
+## Smoke test Dukascopy — validado
+
+Rodado em `EURUSD 2024-06-04 10:00 UTC`: HTTP 200, 3963 ticks decodificados, 12 candles M5
+gerados (12 = 60min ÷ 5min, correto). Preços na faixa 1.0864-1.0872, plausível para EURUSD nesse
+período. Spread reconstruído de 1-2 pontos (0.1-0.2 pip) — mais apertado que spread de varejo, mas
+esperado (Dukascopy agrega múltiplos provedores, cotação nível interbancário); reforça a decisão
+de manter esse campo como referência secundária, nunca como fonte do levantamento de spread da
+Fase 1 (isso continua exclusivo do `spread_sampler.py` contra a conta Exness real). Decodificação
+(`src/dukascopy.py`) considerada validada — liberado para o backfill completo.
 
 ## Linha do tempo desta fase
 
