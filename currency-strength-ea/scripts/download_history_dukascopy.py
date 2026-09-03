@@ -12,20 +12,21 @@ ANTES de disparar isto para o histórico completo, e confira visualmente que
 os preços saem plausíveis. A lógica de decodificação (src/dukascopy.py) não
 pôde ser validada contra um arquivo real no ambiente onde foi escrita.
 
-Volume esperado: 28 pares × ~5-6 anos × 24 arquivos/dia ≈ 1.4-1.6 milhões de
-requisições HTTP pequenas. Com concorrência (--workers, default 6) e as
-noites/fins de semana retornando corpo vazio rapidamente, uma estimativa
-grosseira é de algumas horas de execução — deixe rodando em background.
-É resumível: re-rodar pula pares/dias já cobertos no banco (a menos que
---no-resume seja passado).
+Volume esperado: 28 pares × ~6-7 anos × 24 arquivos/dia ≈ 1.6-1.8 milhões de
+requisições HTTP pequenas. A Dukascopy limita rajada (devolve 503/429 em
+série e libera sozinha em ~1-2 min), então mesmo com --workers baixo isto é
+um job de MUITAS horas, possivelmente 1-2 dias corridos — deixe rodando em
+background e espere ele terminar sozinho. É resumível: re-rodar retoma de
+onde parou (a menos que --no-resume seja passado).
 
-O default de 6 workers é propositalmente conservador: a Dukascopy devolve
-429 (Too Many Requests) sob rajada. Se rodar estável por um bom tempo, dá
-para subir com --workers; se começar a ver muitos "AVISO: HTTP 429", baixe.
+O default de 4 workers é propositalmente conservador. Subir --workers acelera
+até a Dukascopy começar a 503-ar; se vir muitos "AVISO: ... HTTP 503",
+baixe. Se um par parar por falha de download ("BACKFILL INCOMPLETO" no fim),
+é só re-rodar — ele retoma do dia que faltou, sem deixar buraco silencioso.
 
 Uso:
     python -m scripts.download_history_dukascopy
-    python -m scripts.download_history_dukascopy --pairs EURUSD,USDJPY --workers 10
+    python -m scripts.download_history_dukascopy --pairs EURUSD,USDJPY --workers 6
 """
 
 from __future__ import annotations
@@ -55,19 +56,24 @@ from src.dukascopy import (
 from src.gaps import detect_and_log_gaps
 from src.pairs import split_pair
 
-MAX_RETRIES = 5
-RETRY_BACKOFF_SECONDS = 1.5  # erro de rede/timeout: backoff linear curto
-# 429 (Too Many Requests): a Dukascopy é sensível a rajada e pode devolver 429
-# em série. Backoff dedicado, exponencial e bem mais longo que o de erro de
-# rede — e respeitando o header Retry-After quando o servidor o manda.
-RATE_LIMIT_BACKOFF_SECONDS = 10.0
-RATE_LIMIT_BACKOFF_CAP_SECONDS = 120.0
+# A Dukascopy limita rajada devolvendo 503 (e às vezes 429) — testado: com 6
+# workers contínuos ela passa a 503-ar em série, e libera sozinha em ~1-2 min.
+# São transitórios, então o fetch INSISTE com backoff (respeitando Retry-After)
+# por uma janela longa antes de desistir. Desistir aqui significa outage real,
+# não throttle — e o chamador para o par nesse ponto em vez de deixar buraco
+# silencioso no histórico.
+THROTTLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+THROTTLE_BACKOFF_BASE_SECONDS = 5.0
+THROTTLE_BACKOFF_CAP_SECONDS = 120.0
+THROTTLE_GIVE_UP_SECONDS = 900  # ~15 min de 5xx/429 contínuo => desiste
+NETWORK_MAX_RETRIES = 6
+NETWORK_BACKOFF_SECONDS = 2.0
 
 
-def _rate_limit_delay(resp: requests.Response, attempt: int) -> float:
-    """Segundos a esperar após um 429, priorizando o header Retry-After
-    (formato numérico ou data HTTP); sem ele, backoff exponencial com teto e
-    jitter (evita os workers baterem no limite de novo todos juntos)."""
+def _throttle_delay(resp: requests.Response, attempt: int) -> float:
+    """Segundos a esperar após 429/5xx: prioriza o header Retry-After (numérico
+    ou data HTTP); sem ele, backoff exponencial com teto e jitter (evita os
+    workers voltarem a bater no limite todos juntos)."""
     retry_after = resp.headers.get("Retry-After")
     if retry_after:
         try:
@@ -77,63 +83,80 @@ def _rate_limit_delay(resp: requests.Response, attempt: int) -> float:
                 when = parsedate_to_datetime(retry_after)
                 delay = (when - datetime.now(timezone.utc)).total_seconds()
                 if delay > 0:
-                    return delay
+                    return min(delay, THROTTLE_GIVE_UP_SECONDS)
             except (TypeError, ValueError):
                 pass
-    backoff = min(RATE_LIMIT_BACKOFF_CAP_SECONDS, RATE_LIMIT_BACKOFF_SECONDS * (2 ** attempt))
+    backoff = min(THROTTLE_BACKOFF_CAP_SECONDS, THROTTLE_BACKOFF_BASE_SECONDS * (2 ** attempt))
     return backoff + random.uniform(0, 3)
 
 
-def _fetch_hour(session: requests.Session, pair: str, dt_hour: datetime) -> bytes:
+def _fetch_hour(session: requests.Session, pair: str, dt_hour: datetime) -> bytes | None:
+    """Bytes do .bi5 (b'' = hora comprovadamente sem arquivo, via 404 ou corpo
+    vazio), ou None se não deu para baixar mesmo insistindo (outage real). O
+    chamador trata None como 'dia incompleto' e para o par."""
     url = bi5_url(pair, dt_hour)
-    last_problem: object = None
-    for attempt in range(MAX_RETRIES):
+    network_errors = 0
+    throttle_attempt = 0
+    throttle_waited = 0.0
+    while True:
         try:
             resp = session.get(url, timeout=30)
         except requests.RequestException as exc:
-            last_problem = exc
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+            network_errors += 1
+            if network_errors >= NETWORK_MAX_RETRIES:
+                print(f"  AVISO: {url}: desistindo após {network_errors} erros de rede: {exc}", file=sys.stderr)
+                return None
+            time.sleep(NETWORK_BACKOFF_SECONDS * network_errors)
             continue
 
         if resp.status_code == 404:
-            return b""  # par/data sem arquivo — tratado como hora sem tick
+            return b""  # par/data sem arquivo — hora sem tick
         if resp.status_code == 200:
             return resp.content
+        if resp.status_code in THROTTLE_STATUSES:
+            if throttle_waited >= THROTTLE_GIVE_UP_SECONDS:
+                print(
+                    f"  AVISO: {url} -> HTTP {resp.status_code} por >{THROTTLE_GIVE_UP_SECONDS // 60} min, desistindo",
+                    file=sys.stderr,
+                )
+                return None
+            wait = _throttle_delay(resp, throttle_attempt)
+            if throttle_attempt == 2 or throttle_attempt % 20 == 0:
+                print(
+                    f"  AVISO: {url} -> HTTP {resp.status_code}, backoff {wait:.0f}s "
+                    f"(insistindo há {throttle_waited:.0f}s)",
+                    file=sys.stderr,
+                )
+            throttle_attempt += 1
+            throttle_waited += wait
+            time.sleep(wait)
+            continue
 
-        last_problem = f"HTTP {resp.status_code}"
-        if resp.status_code == 429:
-            wait = _rate_limit_delay(resp, attempt)
-        else:
-            wait = RETRY_BACKOFF_SECONDS * (attempt + 1)
-        print(
-            f"  AVISO: {url} -> HTTP {resp.status_code}, aguardando {wait:.0f}s "
-            f"(tentativa {attempt + 1}/{MAX_RETRIES})",
-            file=sys.stderr,
-        )
-        time.sleep(wait)
-
-    print(f"  AVISO: falha ao baixar {url} após {MAX_RETRIES} tentativas: {last_problem}", file=sys.stderr)
-    return b""
+        print(f"  AVISO: {url} -> HTTP {resp.status_code} inesperado, tratando como não baixado", file=sys.stderr)
+        return None
 
 
 def _download_day(
     session: requests.Session, executor: ThreadPoolExecutor, pair: str, day: datetime
-) -> list[tuple]:
+) -> tuple[list[tuple], list[datetime]]:
     hours = [day.replace(hour=h, minute=0, second=0, microsecond=0) for h in range(24)]
     futures = {executor.submit(_fetch_hour, session, pair, h): h for h in hours}
 
     all_rows: list[tuple] = []
+    failed_hours: list[datetime] = []
     for future in as_completed(futures):
         dt_hour = futures[future]
         raw = future.result()
+        if raw is None:
+            failed_hours.append(dt_hour)
+            continue
         ticks = decode_bi5(raw, pair)
         if not ticks:
             continue
-        rows = ticks_to_m5_candles(pair, hour_start_epoch(dt_hour), ticks)
-        all_rows.extend(rows)
+        all_rows.extend(ticks_to_m5_candles(pair, hour_start_epoch(dt_hour), ticks))
 
     all_rows.sort(key=lambda r: r[0])
-    return all_rows
+    return all_rows, failed_hours
 
 
 def _resume_start_day(conn, symbol_id: int, configured_start: datetime) -> datetime:
@@ -153,7 +176,7 @@ def main() -> None:
     parser.add_argument("--pairs", default=None, help="lista separada por vírgula (default: os 28 pares)")
     parser.add_argument("--start", default=config.HISTORY_START_UTC)
     parser.add_argument("--end", default=None, help="ISO 8601 (default: agora)")
-    parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--resume", dest="resume", action="store_true", default=True)
     parser.add_argument("--no-resume", dest="resume", action="store_false")
     args = parser.parse_args()
@@ -165,6 +188,7 @@ def main() -> None:
     conn = db.connect(config.DB_PATH)
     session = requests.Session()
     session.headers.update(REQUEST_HEADERS)
+    halted_pairs: list[tuple[str, object]] = []
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         for pair in pairs:
@@ -181,10 +205,19 @@ def main() -> None:
             total_candles = 0
 
             while day <= end:
-                rows = _download_day(session, executor, pair, day)
+                rows, failed_hours = _download_day(session, executor, pair, day)
                 if rows:
                     db.insert_candles(conn, symbol_id, rows)
                     total_candles += len(rows)
+                if failed_hours:
+                    print(
+                        f"  {day.date()}: {len(rows)} candles M5 salvos, mas {len(failed_hours)} "
+                        f"hora(s) NÃO baixada(s) — parando {pair} aqui. Re-rode o script "
+                        f"para retomar deste dia (é resumível/upsert).",
+                        file=sys.stderr,
+                    )
+                    halted_pairs.append((pair, day.date()))
+                    break
                 print(f"  {day.date()}: {len(rows)} candles M5" + ("" if rows else " (mercado fechado ou sem dado)"))
                 day += timedelta(days=1)
 
@@ -202,6 +235,16 @@ def main() -> None:
             print(f"  total nesta execução: {total_candles} candles | gaps suspeitos (histórico completo): {gaps}")
 
     conn.close()
+
+    if halted_pairs:
+        print("\n" + "=" * 64, file=sys.stderr)
+        print("BACKFILL INCOMPLETO — pares parados por falha de download:", file=sys.stderr)
+        for pair, day in halted_pairs:
+            print(f"  {pair}: retomar a partir de {day}", file=sys.stderr)
+        print("Re-rode `python -m scripts.download_history_dukascopy` para continuar.", file=sys.stderr)
+        sys.exit(1)
+
+    print("\nBackfill completo — todos os pares cobertos até a data pedida.")
 
 
 if __name__ == "__main__":
