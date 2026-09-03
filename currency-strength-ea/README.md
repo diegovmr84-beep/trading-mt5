@@ -53,6 +53,12 @@ currency-strength-ea/
    ```
    set MT5_SYMBOL_SUFFIX=m
    ```
+   **Não adivinhe o sufixo olhando a lista do terminal** — rode o script de diagnóstico, que
+   pergunta direto ao MT5 pelos nomes reais dos símbolos disponíveis na conta e sugere o valor de
+   `MT5_SYMBOL_SUFFIX`:
+   ```
+   python -m scripts.list_symbols
+   ```
 3. Baixar o histórico (roda uma vez; pode ser interrompido e retomado — upsert por timestamp):
    ```
    python -m scripts.download_history
