@@ -65,8 +65,17 @@ CREATE TABLE IF NOT EXISTS data_gaps (
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    # timeout / busy_timeout: espera o lock em vez de erro imediato quando
+    # outro processo está escrevendo. O backfill de histórico
+    # (download_history_dukascopy.py) e o spread_sampler.py rodam em paralelo,
+    # os dois escrevendo neste mesmo arquivo.
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.execute("PRAGMA foreign_keys = ON;")
+    # WAL: um escritor + leitores concorrentes sem bloquear entre si. É uma
+    # propriedade persistente do arquivo (basta setar uma vez; re-setar a
+    # cada conexão é inócuo).
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
     conn.executescript(SCHEMA)
     return conn
 

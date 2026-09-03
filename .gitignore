@@ -4,6 +4,8 @@ __pycache__/
 
 # Dados e credenciais nunca vão para o repositório
 currency-strength-ea/data/*.db
+currency-strength-ea/data/*.db-wal
+currency-strength-ea/data/*.db-shm
 .env
 
 # Outputs gerados localmente (o template do relatório fica versionado,
