@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Dados e credenciais nunca vão para o repositório
+currency-strength-ea/data/*.db
+.env
+
+# Outputs gerados localmente (o template do relatório fica versionado,
+# o CSV/MD gerado com dados reais não)
+currency-strength-ea/reports/spread_por_par_sessao.csv
+currency-strength-ea/reports/spread_por_par_sessao.md
