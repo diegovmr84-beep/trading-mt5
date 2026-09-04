@@ -56,24 +56,28 @@ from src.dukascopy import (
 from src.gaps import detect_and_log_gaps
 from src.pairs import split_pair
 
-# A Dukascopy limita rajada devolvendo 503 (e às vezes 429) — testado: com 6
-# workers contínuos ela passa a 503-ar em série, e libera sozinha em ~1-2 min.
-# São transitórios, então o fetch INSISTE com backoff (respeitando Retry-After)
-# por uma janela longa antes de desistir. Desistir aqui significa outage real,
-# não throttle — e o chamador para o par nesse ponto em vez de deixar buraco
+# A Dukascopy limita rajada devolvendo 503/429 em série E travando a conexão
+# (read timeout) — testado: são a mesma causa (carga), e liberam sozinhas em
+# ~1-2 min. Então 5xx e erro de rede COMPARTILHAM um orçamento único de
+# insistência (~15 min por hora): o fetch retenta com backoff (respeitando
+# Retry-After) até esse teto antes de desistir. Desistir significa outage/hora
+# quebrada de verdade — e aí o chamador para o par, em vez de deixar buraco
 # silencioso no histórico.
 THROTTLE_STATUSES = frozenset({429, 500, 502, 503, 504})
-THROTTLE_BACKOFF_BASE_SECONDS = 5.0
-THROTTLE_BACKOFF_CAP_SECONDS = 120.0
-THROTTLE_GIVE_UP_SECONDS = 900  # ~15 min de 5xx/429 contínuo => desiste
-NETWORK_MAX_RETRIES = 6
-NETWORK_BACKOFF_SECONDS = 2.0
+BACKOFF_BASE_SECONDS = 5.0
+BACKOFF_CAP_SECONDS = 120.0
+GIVE_UP_SECONDS = 900  # ~15 min de 5xx/timeout contínuo na MESMA hora => desiste
+CONNECT_TIMEOUT_SECONDS = 15
+READ_TIMEOUT_SECONDS = 60  # .bi5 de hora movimentada + servidor sob carga
 
 
-def _throttle_delay(resp: requests.Response, attempt: int) -> float:
-    """Segundos a esperar após 429/5xx: prioriza o header Retry-After (numérico
-    ou data HTTP); sem ele, backoff exponencial com teto e jitter (evita os
-    workers voltarem a bater no limite todos juntos)."""
+def _backoff(attempt: int) -> float:
+    return min(BACKOFF_CAP_SECONDS, BACKOFF_BASE_SECONDS * (2 ** attempt)) + random.uniform(0, 3)
+
+
+def _retry_delay(resp: requests.Response, attempt: int) -> float:
+    """Prioriza o header Retry-After (numérico ou data HTTP); sem ele, backoff
+    exponencial com teto e jitter (evita os workers voltarem a bater juntos)."""
     retry_after = resp.headers.get("Retry-After")
     if retry_after:
         try:
@@ -83,30 +87,35 @@ def _throttle_delay(resp: requests.Response, attempt: int) -> float:
                 when = parsedate_to_datetime(retry_after)
                 delay = (when - datetime.now(timezone.utc)).total_seconds()
                 if delay > 0:
-                    return min(delay, THROTTLE_GIVE_UP_SECONDS)
+                    return min(delay, GIVE_UP_SECONDS)
             except (TypeError, ValueError):
                 pass
-    backoff = min(THROTTLE_BACKOFF_CAP_SECONDS, THROTTLE_BACKOFF_BASE_SECONDS * (2 ** attempt))
-    return backoff + random.uniform(0, 3)
+    return _backoff(attempt)
 
 
 def _fetch_hour(session: requests.Session, pair: str, dt_hour: datetime) -> bytes | None:
-    """Bytes do .bi5 (b'' = hora comprovadamente sem arquivo, via 404 ou corpo
-    vazio), ou None se não deu para baixar mesmo insistindo (outage real). O
-    chamador trata None como 'dia incompleto' e para o par."""
+    """Bytes do .bi5 (b'' = 404/hora sem arquivo), ou None se após ~15 min de
+    5xx/timeout na mesma hora não deu — o chamador para o par (sem gap mudo)."""
     url = bi5_url(pair, dt_hour)
-    network_errors = 0
-    throttle_attempt = 0
-    throttle_waited = 0.0
+    attempt = 0
+    waited = 0.0
     while True:
         try:
-            resp = session.get(url, timeout=30)
+            resp = session.get(url, timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS))
         except requests.RequestException as exc:
-            network_errors += 1
-            if network_errors >= NETWORK_MAX_RETRIES:
-                print(f"  AVISO: {url}: desistindo após {network_errors} erros de rede: {exc}", file=sys.stderr)
+            if waited >= GIVE_UP_SECONDS:
+                print(f"  AVISO: {url}: desistindo após {waited:.0f}s ({exc.__class__.__name__})", file=sys.stderr)
                 return None
-            time.sleep(NETWORK_BACKOFF_SECONDS * network_errors)
+            wait = _backoff(attempt)
+            if attempt == 3 or attempt % 20 == 0:
+                print(
+                    f"  AVISO: {url}: {exc.__class__.__name__}, backoff {wait:.0f}s "
+                    f"(insistindo há {waited:.0f}s)",
+                    file=sys.stderr,
+                )
+            attempt += 1
+            waited += wait
+            time.sleep(wait)
             continue
 
         if resp.status_code == 404:
@@ -114,21 +123,21 @@ def _fetch_hour(session: requests.Session, pair: str, dt_hour: datetime) -> byte
         if resp.status_code == 200:
             return resp.content
         if resp.status_code in THROTTLE_STATUSES:
-            if throttle_waited >= THROTTLE_GIVE_UP_SECONDS:
+            if waited >= GIVE_UP_SECONDS:
                 print(
-                    f"  AVISO: {url} -> HTTP {resp.status_code} por >{THROTTLE_GIVE_UP_SECONDS // 60} min, desistindo",
+                    f"  AVISO: {url} -> HTTP {resp.status_code} por >{GIVE_UP_SECONDS // 60} min, desistindo",
                     file=sys.stderr,
                 )
                 return None
-            wait = _throttle_delay(resp, throttle_attempt)
-            if throttle_attempt == 2 or throttle_attempt % 20 == 0:
+            wait = _retry_delay(resp, attempt)
+            if attempt == 3 or attempt % 20 == 0:
                 print(
                     f"  AVISO: {url} -> HTTP {resp.status_code}, backoff {wait:.0f}s "
-                    f"(insistindo há {throttle_waited:.0f}s)",
+                    f"(insistindo há {waited:.0f}s)",
                     file=sys.stderr,
                 )
-            throttle_attempt += 1
-            throttle_waited += wait
+            attempt += 1
+            waited += wait
             time.sleep(wait)
             continue
 
