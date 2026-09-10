@@ -68,11 +68,27 @@ def main() -> None:
     if args.hours is not None:
         deadline = time.monotonic() + args.hours * 3600
 
-    conn = db.connect(config.DB_PATH)
-    symbol_ids: dict[str, int] = {}
-    for canonical in config.PAIRS:
-        base, quote = split_pair(canonical)
-        symbol_ids[canonical] = db.upsert_symbol(conn, canonical, base, quote)
+    # A init (connect + 28 upsert_symbol) também pode bater em "database is
+    # locked" quando o backfill de histórico está commitando — e aqui não é o
+    # laço de amostragem, é o começo do processo. Sem retry, o processo morre
+    # antes de amostrar nada (visto rodando). Tenta algumas vezes com backoff.
+    conn = None
+    for attempt in range(8):
+        try:
+            conn = db.connect(config.DB_PATH)
+            symbol_ids: dict[str, int] = {}
+            for canonical in config.PAIRS:
+                base, quote = split_pair(canonical)
+                symbol_ids[canonical] = db.upsert_symbol(conn, canonical, base, quote)
+            break
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == 7:
+                raise
+            if conn is not None:
+                conn.close()
+                conn = None
+            print(f"  init: banco travado, tentativa {attempt + 1}/8, aguardando...", file=sys.stderr)
+            time.sleep(3 * (attempt + 1))
 
     print(f"Amostrando spread a cada {config.SPREAD_SAMPLE_INTERVAL_SECONDS}s. Ctrl+C para parar.")
 
