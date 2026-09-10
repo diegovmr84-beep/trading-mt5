@@ -1,115 +1,131 @@
 # Relatório — Fase 1: Coleta de dados e levantamento de spread
 
-**Status: infraestrutura pronta e testada (26 testes); smoke test da Dukascopy validado com dado
-real; backfill completo e amostragem de spread ainda pendentes.**
+**Status: histórico M5 dos 8 majors 2020→2026 COMPLETO e verificado (3.998.288 candles).
+Amostragem de spread ao vivo EM ANDAMENTO (iniciada 2026-09-03, ~460 mil amostras).
+Os 20 pares cruzados não-major ainda não têm histórico (majors-first, decisão de escopo).**
 
-## Smoke test Dukascopy — validado
+## 1. Histórico de candles M5 — Dukascopy (COMPLETO para os 8 majors)
 
-Rodado em `EURUSD 2024-06-04 10:00 UTC`: HTTP 200, 3963 ticks decodificados, 12 candles M5
-gerados (12 = 60min ÷ 5min, correto). Preços na faixa 1.0864-1.0872, plausível para EURUSD nesse
-período. Spread reconstruído de 1-2 pontos (0.1-0.2 pip) — mais apertado que spread de varejo, mas
-esperado (Dukascopy agrega múltiplos provedores, cotação nível interbancário); reforça a decisão
-de manter esse campo como referência secundária, nunca como fonte do levantamento de spread da
-Fase 1 (isso continua exclusivo do `spread_sampler.py` contra a conta Exness real). Decodificação
-(`src/dukascopy.py`) considerada validada — liberado para o backfill completo.
+Fonte: tick history público da Dukascopy (`datafeed.dukascopy.com`), decodificado do formato
+`.bi5` (LZMA + registros de 20 bytes) e reamostrado para M5 localmente, usando **preço mid
+((ask+bid)/2)**. Ver `src/dukascopy.py` e `README.md` para a justificativa do mid.
 
-## Linha do tempo desta fase
+### Números reais (verificados em 2026-09-10)
 
-1. Infraestrutura inicial escrita nesta sessão remota (sem MT5/internet aberta disponíveis):
-   geração dos 28 pares, schema SQLite, conector MT5, scripts de download/amostragem/relatório.
-2. Você abriu uma sessão local do Claude Code na sua máquina Windows, com o terminal MT5 da
-   Exness já logado (conta `Exness-MT5Trial11`, trial/demo).
-3. **Diagnóstico de símbolos**: a conta usa sufixo `m` em todos os 28 pares (`EURUSDm`,
-   `GBPJPYm`, etc.) — 356 símbolos visíveis no total, 28/28 pares canônicos encontrados como
-   `<PAR>m`. `MT5_SYMBOL_SUFFIX=m` confirmado.
-4. **Download do histórico via MT5 bateu em dois limites independentes**, ambos específicos
-   dessa conta/terminal, não bugs no código:
-   - Limite de "Máx. barras no gráfico" do terminal (100.000) — qualquer pedido de M5 cobrindo
-     mais de ~347 dias retorna `Invalid params`.
-   - **A conta Trial só tem histórico M5 a partir de ~2025-05-02** — mesmo contornando o limite
-     acima, o servidor da Exness não entrega M5 anterior a essa data para essa conta. Timeframes
-     maiores (H1, H4, D1) têm histórico completo desde 2020 na mesma conta — o problema é
-     específico do M5.
-5. **Decisão tomada**: separar as duas fontes de dado em vez de mudar o timeframe do estudo para
-   contornar a limitação da conta (mudar para H1 introduziria descompasso entre o timeframe do
-   índice de força e o timeframe de execução — risco relevante que você mesmo levantou, e motivo
-   correto para não fazer essa troca). Adotado:
-   - **Histórico de candles M5 (2020+)**: via **Dukascopy** (tick history público, gratuito, sem
-     cadastro), reconstruído para M5 localmente.
-   - **Spread real por par/sessão**: continua exclusivamente via **MT5/Exness ao vivo** — isso
-     não pode vir de outra fonte, é a exigência central da Seção 6 do estudo.
-6. Implementados: `src/dukascopy.py` (decodificação do formato .bi5 + resample para M5),
-   `scripts/download_history_dukascopy.py` (backfill completo, concorrente, resumível),
-   `scripts/dukascopy_smoke_test.py` (validação com 1 arquivo real antes do backfill completo),
-   `src/gaps.py` (detecção de gaps compartilhada entre os dois downloaders). 26 testes no total,
-   todos passando.
+| par | período | candles | % do teórico |
+|---|---|---|---|
+| EURUSD | 2020-01-01 → 2026-09-04 | 499.690 | 99,6% |
+| GBPUSD | 2020-01-01 → 2026-09-04 | 499.572 | 99,6% |
+| USDJPY | 2020-01-01 → 2026-09-09 | 500.376 | 99,6% |
+| USDCHF | 2020-01-01 → 2026-09-09 | 499.922 | 99,5% |
+| USDCAD | 2020-01-01 → 2026-09-09 | 500.371 | 99,6% |
+| AUDUSD | 2020-01-01 → 2026-09-04 | 499.591 | 99,6% |
+| NZDUSD | 2020-01-01 → 2026-09-04 | 499.265 | 99,5% |
+| EURGBP | 2020-01-01 → 2026-09-04 | 499.501 | 99,6% |
+| **total** | | **3.998.288** | |
 
-## O que foi feito
+O déficit de ~0,4-0,5% vs o teórico (288 candles/dia × ~5/7 dias) é **inteiramente feriado de
+mercado** — não é perda de dado. Ver checagem de integridade abaixo.
 
-- Geração determinística e testada dos 28 pares cruzados (`src/pairs.py`, 6 testes).
-- Classificação de sessão UTC (`src/sessions.py`, 6 testes).
-- Schema SQLite com 4 tabelas, todos os inserts upsert-safe (`src/db.py`, 5 testes).
-- Detecção de gaps de dado compartilhada entre os dois caminhos de download (`src/gaps.py`,
-  3 testes) — recalculada sobre o histórico completo a cada execução, sem duplicar registros ao
-  retomar.
-- Decodificação do tick history da Dukascopy: parsing do formato binário `.bi5` (LZMA + registros
-  de 20 bytes), conversão para candles M5 usando preço médio (mid), com o formato validado por
-  busca em múltiplas fontes independentes e testado com dados sintéticos (`src/dukascopy.py`,
-  6 testes) — **ainda não validado contra um arquivo real** (ver limitações abaixo).
-- Wrapper de conexão MT5 com credenciais só via variável de ambiente (`src/mt5_connector.py`).
-- `scripts/list_symbols.py` — já rodado com sucesso na sua conta, confirmou sufixo `m`.
-- `scripts/download_history.py` (via MT5) — já rodado; funcional, mas limitado a ~8 meses de M5
-  pela profundidade de histórico da conta Trial.
-- `scripts/download_history_dukascopy.py` — backfill completo via Dukascopy, com concorrência
-  configurável, retry com backoff, e resumível (retoma do último candle salvo por par).
-- `scripts/dukascopy_smoke_test.py` — baixa e decodifica UMA hora real para inspeção visual antes
-  do backfill completo.
-- `scripts/spread_sampler.py` / `scripts/spread_report.py` — prontos, ainda não rodados.
+### Checagem de integridade (script ad hoc, 2026-09-10)
 
-## O que NÃO foi feito (e por quê)
+1. **Sanidade de preço**: 0 candles com preço zero/negativo, 0 com OHLC inconsistente
+   (high<low, etc.), em todos os 8 pares. Faixas min-max coerentes com o mercado real do período
+   (ex: EURUSD 0,954-1,235; GBPUSD 1,034-1,425 incluindo o flash de set/2022; USDJPY 101-164).
+2. **`data_gaps`: 16 registros, todos benignos** — são o fechamento de Ano Novo (2020→2021 e
+   2023→2024), ~72h cada, 2 por par. O detector (`src/gaps.py`, limiar 72h) pega esses.
+3. **Feriados abaixo do limiar de 72h** (NÃO ficam em `data_gaps`, mas existem na série e são
+   normais): Natal (~14h de buraco, todo 25/12) e Réveillon de dias úteis (~24h, 31/12 de 2024 e
+   2025). Sistemáticos e idênticos entre pares → mercado fechado, não falha de coleta.
+   **Fase 2+ deve tratar esses buracos de feriado ao construir a série de retorno.**
+4. **Horas que "pararam" um par durante o backfill** (o script para o par numa hora que não
+   baixa após ~15 min de retry, para não deixar buraco silencioso — ver §4): todas foram
+   preenchidas nas passadas de `--resume` seguintes. Verificado: os dias
+   (USDJPY 2025-08-13, USDCHF 2023-10-26, EURUSD 2020-05-05, GBPUSD 2021-08-18) têm as 24h
+   completas. USDCAD 2020-10-16 e USDCHF 2021-07-23 são sextas — hora 21-23 ausente é o
+   fechamento normal de sexta, não buraco.
 
-**Nenhum histórico de candles real (Dukascopy) e nenhuma amostra de spread real ainda existem.**
+### Campo `broker_spread` nos candles
 
-- O histórico M5 2020+ via Dukascopy não pôde ser baixado nem validado nesta sessão remota: o
-  ambiente não tem acesso de rede à Dukascopy (só um allowlist restrito de hosts — testado e
-  confirmado, não é instabilidade de rede). A lógica de decodificação foi testada só com dados
-  sintéticos gerados aqui mesmo, não com um arquivo real.
-- O levantamento de spread ao vivo ainda não foi iniciado na conta Trial (item independente do
-  bloqueio de histórico — pode começar a qualquer momento).
+Guardado só como referência secundária (spread médio do bucket em pontos, calculado dos ticks
+Dukascopy). **NÃO é a fonte do levantamento de spread da Fase 1** — isso é exclusivo do
+`spread_sampler.py` ao vivo (§2). Valores típicos observados: 1-3 pontos para EURUSD (nível
+interbancário, mais apertado que varejo — esperado).
 
-Isso é reportado explicitamente em vez de simulado ou estimado, seguindo o mesmo princípio de
-integridade que o estudo prévio exige para o backtest.
+## 2. Spread real por par/sessão — MT5/Exness ao vivo (EM ANDAMENTO)
 
-## Próximo passo concreto
+`scripts/spread_sampler.py`, rodando contra o terminal MT5 da conta **Exness-MT5Trial11** (demo),
+sufixo de símbolo `m`. Amostra bid/ask dos 28 pares a cada 30s, taggeado por sessão.
 
-Na sua máquina Windows (mesma sessão local do Claude Code já aberta):
+- **Início**: 2026-09-03 20:48 UTC. **Amostras até 2026-09-10 ~04:00**: ~460 mil, cobrindo as 5
+  categorias de sessão (tokyo/london/ny/london_ny_overlap/other).
+- **Meta**: 2-3 semanas corridas para ter volume suficiente em cada sessão, incl. segunda pós-gap.
+- **Buracos conhecidos na série de spread** (registrados por honestidade, reabsorvíveis numa
+  coleta de semanas):
+  - ~7,3h em 2026-09-08 (09:05→16:27 UTC): o supervisor v1 amplificou um hiccup do MT5 num
+    festival de reinícios. Corrigido com backoff exponencial (supervisor v2).
+  - ~7 min em 2026-09-09 (~21:43→21:50 UTC): o restart da sessão do Claude Code matou os
+    processos; religados na sequência.
+- Relatório agregado: `python -m scripts.spread_report --min-samples 200` (pares/sessões abaixo
+  do mínimo aparecem como "DADO INSUFICIENTE", nunca com número estimado).
 
-1. `python -m scripts.dukascopy_smoke_test --pair EURUSD --date 2024-06-04 --hour 10` — conferir
-   visualmente que os preços saem plausíveis antes de qualquer coisa.
-2. Se plausível: `python -m scripts.download_history_dukascopy` (backfill completo — vai demorar
-   horas, ver aviso de volume no script; pode rodar em background).
-3. Em paralelo, `python -m scripts.spread_sampler` na conta Trial, rodando continuamente por
-   2-3 semanas.
-4. `python -m scripts.spread_report` para gerar o relatório de spread quando houver amostra
-   suficiente.
+## 3. Linha do tempo desta fase
 
-## Limitações/decisões que precisam da sua revisão
+1. Infra escrita numa sessão remota (sem MT5/Dukascopy): 28 pares, schema SQLite, conector MT5,
+   scripts de download/amostragem/relatório.
+2. Sessão local Windows, terminal MT5 Exness já logado. Diagnóstico: sufixo `m` em 28/28 pares.
+3. **Download via MT5 bateu em dois limites** da conta Trial (não bugs): limite de 100k barras no
+   gráfico (~347 dias), e M5 só disponível a partir de ~2025 nessa conta. H1/H4/D1 têm 2020+.
+4. **Decisão**: separar as fontes em vez de trocar o timeframe do estudo (trocar pra H1 criaria
+   descompasso entre timeframe do índice de força e o de execução). Adotado:
+   - Histórico de candles M5 2020+ → **Dukascopy** (reamostrado localmente).
+   - Spread real → continua **exclusivamente MT5/Exness ao vivo** (exigência da Seção 6).
+5. Implementado `src/dukascopy.py`, `download_history_dukascopy.py`, `dukascopy_smoke_test.py`,
+   `src/gaps.py`. Smoke test validado em `EURUSD 2024-06-04 10:00` contra arquivo real.
+6. **Backfill dos 8 majors** (2026-09-03 → 2026-09-10): rodado em background, faseado
+   (majors primeiro), com várias correções feitas rodando de verdade (§4). 3.998.288 candles.
+7. **Spread sampler** iniciado em paralelo 2026-09-03, segue rodando.
 
-- [x] Sufixo de símbolo da conta Exness: confirmado `m`.
-- [ ] **Spread coletado na conta Trial precisa ser revalidado numa conta real antes da Fase 5** —
-      contas demo por vezes simulam spread mais favorável do que uma conta real. Combinado
-      anteriormente: pode começar a coleta na Trial agora, mas isso fica marcado como pendente de
-      revalidação, não como definitivo.
-- [ ] Confirmar se 2-3 semanas de amostragem contínua de spread é aceitável, ou se prefere outro
-      período.
-- [ ] Preço mid (não bid) usado para reconstruir os candles da Dukascopy — decisão documentada no
-      README, revisar se concorda com a justificativa (separação do custo de spread, Seção 3.3).
-- [ ] Revisar a convenção de base/quote dos 28 pares (`EUR > GBP > AUD > NZD > USD > CAD > CHF >
-      JPY`).
-- [ ] O histórico real dos candles Dukascopy (preços, contagem de gaps) ainda precisa ser revisado
-      quando o backfill terminar — este relatório será atualizado com os números reais nessa hora.
+## 4. Correções feitas durante o backfill (todas commitadas)
 
-## Pergunta em aberto do próprio estudo (Seção 10) — ainda não fechada
+Descobertas rodando contra a Dukascopy/MT5 reais, não presumidas:
 
-- [ ] Levantar dados reais de spread por par na Exness para calibrar os limites por par — depende
-      da execução do `spread_sampler.py` acima.
+- **User-Agent**: a Dukascopy devolve HTTP 429 ao UA padrão do `requests`; com UA de navegador,
+  200. (`REQUEST_HEADERS` em `src/dukascopy.py`.)
+- **Throttle 503**: sob rajada a Dukascopy 503-a em série (e trava conexão) e libera em ~1-2 min.
+  5xx e read-timeout agora compartilham um orçamento único de ~15 min de insistência por hora;
+  esgotado, o par **para com aviso** (nunca buraco silencioso) e é retomado por `--resume`.
+  `--workers` 12→4 (acima disso a Dukascopy corta).
+- **SQLite em WAL + busy_timeout**: backfill e sampler escrevem no mesmo arquivo em paralelo.
+- **Modo "anexar ao terminal MT5 já aberto"** no `mt5_connector` (sem credenciais no ambiente).
+- **`spread_sampler_supervisor.py`**: o sampler às vezes pendura numa chamada MT5 (sem erro) ou
+  nem inicializa. Supervisor externo reinicia com backoff exponencial nas falhas seguidas; após
+  5 falhas loga `ALERTA` (terminal precisa de atenção humana).
+
+## 5. Estrutura de dados (SQLite, `data/currency_strength.db`, gitignored)
+
+- `candles_m5(symbol_id, ts_utc, open, high, low, close, tick_volume, real_volume, broker_spread)`
+  — PK (symbol_id, ts_utc), upsert-safe.
+- `spread_samples(symbol_id, ts_utc, session, bid, ask, spread_points)` — append.
+- `data_gaps(symbol_id, gap_start_utc, gap_end_utc, note)` — recalculado por par a cada run.
+- `symbols(id, name, base_currency, quote_currency)` — os 28 pares canônicos.
+
+## 6. Limitações / decisões que precisam da sua revisão
+
+- [x] Sufixo de símbolo Exness: `m`, confirmado rodando.
+- [x] Histórico M5 dos 8 majors: completo e verificado (esta revisão).
+- [ ] **20 pares cruzados não-major sem histórico** — decisão de escopo (majors-first). Definir se
+      e quando baixar o resto (mesmo script, `--pairs <lista>`), ~2 dias a mais de download.
+- [ ] **Spread da conta Trial precisa ser revalidado numa conta real antes da Fase 5** — demo às
+      vezes simula spread mais favorável. Coleta na Trial serve pra calibração inicial, marcada
+      como pendente de revalidação.
+- [ ] Confirmar se 2-3 semanas de amostragem de spread é aceitável.
+- [ ] Preço **mid** (não bid) nos candles Dukascopy — revisar a justificativa (README, Seção 3.3).
+- [ ] Convenção base/quote dos 28 pares (`EUR > GBP > AUD > NZD > USD > CAD > CHF > JPY`).
+- [ ] Buracos de feriado (Natal ~14h, Réveillon ~24h) na série M5 — Fase 2 precisa tratá-los ao
+      construir retornos; não são erro de coleta.
+
+## 7. Pergunta em aberto do próprio estudo (Seção 10)
+
+- [ ] Limites de spread por par na Exness para o filtro de pares operáveis — depende do
+      `spread_report` quando a amostragem tiver volume suficiente.

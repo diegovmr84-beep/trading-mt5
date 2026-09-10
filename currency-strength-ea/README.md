@@ -14,19 +14,17 @@ implementa a **Fase 1**.
 Nenhum dos dois caminhos usa número inventado como se fosse dado de mercado — isso violaria o
 princípio central do estudo prévio.
 
-## ⚠️ Limitações desta sessão
+## Estado da coleta
 
-- **MT5 só roda em Windows.** O terminal precisa estar instalado e logado; os scripts que falam
-  com ele (`spread_sampler.py`, `list_symbols.py`, `download_history.py`) não funcionam neste
-  ambiente Linux nem em qualquer máquina sem o terminal.
-- **Este ambiente também não tem acesso de rede à Dukascopy** (só um allowlist restrito de hosts).
-  Por isso o download via `download_history_dukascopy.py` também não pôde ser executado nem
-  validado aqui contra um arquivo real — só a lógica de decodificação foi testada com dados
-  sintéticos (`tests/test_dukascopy.py`). **Rode `scripts/dukascopy_smoke_test.py` numa hora/par
-  conhecido antes de disparar o download completo**, e confira visualmente que os preços saem
-  plausíveis.
-- Portanto: nenhum dado real (histórico ou spread) foi coletado nesta sessão. Ver
-  `reports/fase1_relatorio.md` para o estado detalhado.
+- **Histórico M5 dos 8 majors: COMPLETO** — 2020-01-01 → 2026-09, ~3,99 milhões de candles,
+  verificado (sanidade de preço, gaps = só feriado). Ver `reports/fase1_relatorio.md`.
+- **Spread ao vivo: em andamento** — `spread_sampler.py` rodando contra a Exness-MT5Trial11 desde
+  2026-09-03, meta de 2-3 semanas.
+- **20 pares cruzados não-major: sem histórico ainda** — decisão de escopo (majors primeiro).
+- **MT5 só roda em Windows** com o terminal instalado e logado; o download via Dukascopy
+  (`download_history_dukascopy.py`) roda em qualquer SO com internet normal.
+- **Sempre rode `scripts/dukascopy_smoke_test.py` numa hora/par conhecido antes de um backfill
+  novo** (ex: ao baixar os pares cruzados) e confira que os preços saem plausíveis.
 
 ## Estrutura
 
@@ -46,6 +44,7 @@ currency-strength-ea/
 │   ├── download_history_dukascopy.py   # baixa candles M5 via Dukascopy (não depende de MT5/Windows)
 │   ├── dukascopy_smoke_test.py         # valida o parsing Dukascopy com UM arquivo real antes do backfill
 │   ├── spread_sampler.py               # amostra spread bid/ask AO VIVO continuamente (via MT5)
+│   ├── spread_sampler_supervisor.py    # roda o sampler e o reinicia (backoff exp) se o terminal MT5 pendurar
 │   └── spread_report.py                # agrega as amostras em relatório CSV/Markdown por par/sessão
 ├── tests/                               # testes de lógica pura (não dependem de MT5/Windows nem de rede)
 ├── reports/                             # relatórios gerados (dados reais são gitignored, só o .md fica)
@@ -71,22 +70,19 @@ currency-strength-ea/
 
 ### Spread real e (opcionalmente) histórico via MT5 (precisa de Windows + terminal Exness logado)
 
-1. Definir variáveis de ambiente com as credenciais da conta (nunca colocar em arquivo versionado):
+1. **Modo padrão: anexar ao terminal já aberto.** Deixe o terminal MT5 da Exness aberto e logado
+   na conta desejada — o `mt5_connector` anexa à sessão existente, nenhuma credencial passa pelo
+   código. (Alternativa para automação: definir `MT5_LOGIN`/`MT5_PASSWORD`/`MT5_SERVER` no
+   ambiente, nunca em arquivo versionado.)
+   Se a Exness expuser os símbolos com sufixo (ex: `EURUSDm`), defina `MT5_SYMBOL_SUFFIX`
+   — descoberto rodando, não adivinhando: `python -m scripts.list_symbols`.
+2. Rodar a amostragem de spread ao vivo por 2-3 semanas corridas, **via supervisor** (reinicia o
+   sampler se o terminal MT5 pendurar, com backoff exponencial):
    ```
-   set MT5_LOGIN=12345678
-   set MT5_PASSWORD=sua_senha
-   set MT5_SERVER=Exness-MT5Real8      # ou o servidor demo, conforme a conta usada
+   set MT5_SYMBOL_SUFFIX=m
+   python -m scripts.spread_sampler_supervisor
    ```
-   Se a Exness expuser os símbolos com sufixo (ex: `EURUSDm` em vez de `EURUSD`), defina também
-   `MT5_SYMBOL_SUFFIX` — descoberto rodando (não adivinhando na interface):
-   ```
-   python -m scripts.list_symbols
-   ```
-2. Rodar a amostragem de spread ao vivo, deixando rodar continuamente por pelo menos 2-3 semanas
-   corridas para cobrir todas as sessões com volume suficiente de amostras:
-   ```
-   python -m scripts.spread_sampler
-   ```
+   (`python -m scripts.spread_sampler` roda o sampler direto, sem a proteção do supervisor.)
 3. Gerar o relatório de spread por par/sessão a qualquer momento para ver o progresso
    (pares/sessões com menos de `--min-samples` amostras aparecem como "DADO INSUFICIENTE", nunca
    com um número estimado):
