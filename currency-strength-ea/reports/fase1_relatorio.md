@@ -128,17 +128,41 @@ Descobertas rodando contra a Dukascopy/MT5 reais, não presumidas:
 ## 6. Limitações / decisões que precisam da sua revisão
 
 - [x] Sufixo de símbolo Exness: `m`, confirmado rodando.
-- [x] Histórico M5 dos 8 majors: completo e verificado (esta revisão).
-- [ ] **20 pares cruzados não-major sem histórico** — decisão de escopo (majors-first). Definir se
-      e quando baixar o resto (mesmo script, `--pairs <lista>`), ~2 dias a mais de download.
-- [ ] **Spread da conta Trial precisa ser revalidado numa conta real antes da Fase 5** — demo às
-      vezes simula spread mais favorável. Coleta na Trial serve pra calibração inicial, marcada
-      como pendente de revalidação.
-- [ ] Confirmar se 2-3 semanas de amostragem de spread é aceitável.
-- [ ] Preço **mid** (não bid) nos candles Dukascopy — revisar a justificativa (README, Seção 3.3).
-- [ ] Convenção base/quote dos 28 pares (`EUR > GBP > AUD > NZD > USD > CAD > CHF > JPY`).
-- [ ] Buracos de feriado (Natal ~14h, Réveillon ~24h) na série M5 — Fase 2 precisa tratá-los ao
-      construir retornos; não são erro de coleta.
+- [x] Histórico M5 dos 8 majors: completo e verificado.
+- [x] 20 pares cruzados: completo e verificado (28/28).
+- [x] 2-3 semanas de amostragem de spread: cumprido e excedido (31 dias, cobertura completa).
+- [x] **Spread da conta Trial revalidar numa conta real antes da Fase 5 — revisado, recomendação:
+      manter a exigência, mas como gate no início da Fase 5/6, não bloqueando Fases 2-4.** O
+      próprio estudo (linha 157 / `currency-strength-prompt.md` Fase 6) já define Fase 5/6 como
+      "paper trading em conta **demo** Exness" — ou seja, nenhuma fase planejada hoje usa conta
+      real de fato. Proposta: antes de abrir Fase 5, comparar a distribuição de spread da Trial
+      (já coletada) contra uma amostra curta numa conta Exness real (mesmo sem capital
+      significativo, só pra capturar o bid/ask de verdade) para um subconjunto de pares/sessões
+      críticos. Se bater dentro de uma tolerância, segue com os limiares calibrados na Trial; se a
+      demo for sistematicamente mais apertada, recalibrar os limiares de spread por par (Seção 5
+      do estudo) antes de qualquer paper trading. Não é bloqueio agora — é checklist de abertura
+      da Fase 5.
+- [x] **Preço mid (não bid) nos candles Dukascopy — revisado, recomendação: manter.** Consistente
+      com a separação que o próprio estudo exige (Seção 3.3): o índice de força usa a série de
+      preço "limpa" (mid, sem metade do spread embutida no retorno), e o custo de operar entra uma
+      única vez, no filtro de pares operáveis (spread ao vivo, Seção 5/6). Usar bid duplicaria o
+      efeito do spread (uma vez no cálculo do índice, outra no filtro). Nota: mesmo o bid/ask da
+      própria Dukascopy (pool interbancário) não seria igual ao da Exness retail de qualquer
+      forma — por isso mid "broker-agnostic" pro cálculo, e Exness ao vivo pro custo real, são as
+      fontes corretas e já estão corretamente separadas no código.
+- [x] **Convenção base/quote `EUR > GBP > AUD > NZD > USD > CAD > CHF > JPY` — revisado,
+      recomendação: manter.** Não é arbitrária: é a precedência padrão de mercado, é como o
+      MT5/Exness e a Dukascopy já expõem os símbolos (confirmado baixando os 28 pares reais — ex.
+      `EURGBP`, nunca `GBPEUR`), e o sinal do retorno na decomposição de força (Seção 3.0) depende
+      dessa convenção ser consistente com a fonte de dado. Trocar inverteria sinais sem ganho
+      nenhum e quebraria o alinhamento com os símbolos reais da corretora.
+- [x] **Buracos de feriado (Natal ~14h, Réveillon ~24h) na série M5 — revisado, não é defeito de
+      coleta; é o parâmetro "tratamento de gaps de feriado" que o próprio estudo (Seção 3.2) já
+      lista como a ser decidido na Fase 2, não na Fase 1.** Recomendação concreta para a Fase 2:
+      tratar feriado igual a fim de semana — não fabricar candle nem interpolar; ao calcular
+      retorno de sessão (Seção 3.2), excluir ou marcar separadamente qualquer sessão cujo início
+      caia logo após um gap registrado em `data_gaps` (mesma tabela já populada nesta fase), pra
+      não confundir "liquidez voltando após feriado" com um movimento de força real.
 
 ## 7. Pergunta em aberto do próprio estudo (Seção 10)
 
