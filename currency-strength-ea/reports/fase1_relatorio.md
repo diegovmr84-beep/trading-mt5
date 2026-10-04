@@ -1,10 +1,10 @@
 # Relatório — Fase 1: Coleta de dados e levantamento de spread
 
-**Status (atualizado 2026-10-04): histórico M5 dos 28 pares 2020→2026 COMPLETO e verificado
-(14.025.828 candles — 8 majors + 20 cruzados, todos com dado desde 2020-01-01). Amostragem de
-spread ao vivo EM ANDAMENTO (iniciada 2026-09-03, ~2,4 milhões de amostras). Rodando um top-up
-final pra trazer todos os pares até a data de hoje (os majors pararam no snapshot de set/2026,
-os cruzados foram completando ao longo de set-out/2026).**
+**FASE 1 ENCERRADA (2026-10-04). Histórico M5 dos 28 pares 2020→2026 completo e verificado
+(14.069.101 candles). Amostragem de spread ao vivo completa e PARADA — rodou 2026-09-03 a
+2026-10-04 (31 dias, acima da meta de 2-3 semanas), 2.413.348 amostras, zero combinação
+par/sessão com dado insuficiente (ver `reports/spread_por_par_sessao.md`, limiar 200 amostras).
+Faltam só as decisões de revisão listadas na Seção 6 antes de avançar pra Fase 2.**
 
 ## 1. Histórico de candles M5 — Dukascopy (COMPLETO para os 28 pares)
 
@@ -63,14 +63,18 @@ Dukascopy). **NÃO é a fonte do levantamento de spread da Fase 1** — isso é 
 `spread_sampler.py` ao vivo (§2). Valores típicos observados: 1-3 pontos para EURUSD (nível
 interbancário, mais apertado que varejo — esperado).
 
-## 2. Spread real por par/sessão — MT5/Exness ao vivo (EM ANDAMENTO)
+## 2. Spread real por par/sessão — MT5/Exness ao vivo (COMPLETO, parado em 2026-10-04)
 
-`scripts/spread_sampler.py`, rodando contra o terminal MT5 da conta **Exness-MT5Trial11** (demo),
-sufixo de símbolo `m`. Amostra bid/ask dos 28 pares a cada 30s, taggeado por sessão.
+`scripts/spread_sampler.py`, rodado contra o terminal MT5 da conta **Exness-MT5Trial11** (demo),
+sufixo de símbolo `m`. Amostrou bid/ask dos 28 pares a cada 30s, taggeado por sessão.
 
-- **Início**: 2026-09-03 20:48 UTC. **Amostras até 2026-09-10 ~04:00**: ~460 mil, cobrindo as 5
-  categorias de sessão (tokyo/london/ny/london_ny_overlap/other).
-- **Meta**: 2-3 semanas corridas para ter volume suficiente em cada sessão, incl. segunda pós-gap.
+- **Período**: 2026-09-03 20:48 UTC → 2026-10-04 (31 dias corridos, acima da meta de 2-3 semanas).
+  **2.413.348 amostras** no total.
+- **Cobertura**: `scripts.spread_report --min-samples 200` roda sobre os 28 pares × 5 sessões
+  (tokyo/london/ny/london_ny_overlap/other) e **nenhuma combinação ficou como "DADO
+  INSUFICIENTE"** — a mais fraca ainda tem milhares de amostras. Relatório em
+  `reports/spread_por_par_sessao.md` / `.csv` (gitignored, dado real local).
+- Processo parado deliberadamente após confirmar a cobertura — não dá mais ganho rodar além disso.
 - **Buracos conhecidos na série de spread** (registrados por honestidade, reabsorvíveis numa
   coleta de semanas):
   - ~7,3h em 2026-09-08 (09:05→16:27 UTC): o supervisor v1 amplificou um hiccup do MT5 num
