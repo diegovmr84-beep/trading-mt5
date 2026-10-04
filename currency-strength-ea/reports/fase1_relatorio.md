@@ -1,10 +1,21 @@
 # Relatório — Fase 1: Coleta de dados e levantamento de spread
 
-**Status: histórico M5 dos 8 majors 2020→2026 COMPLETO e verificado (3.998.288 candles).
-Amostragem de spread ao vivo EM ANDAMENTO (iniciada 2026-09-03, ~460 mil amostras).
-Os 20 pares cruzados não-major ainda não têm histórico (majors-first, decisão de escopo).**
+**Status (atualizado 2026-10-04): histórico M5 dos 28 pares 2020→2026 COMPLETO e verificado
+(14.025.828 candles — 8 majors + 20 cruzados, todos com dado desde 2020-01-01). Amostragem de
+spread ao vivo EM ANDAMENTO (iniciada 2026-09-03, ~2,4 milhões de amostras). Rodando um top-up
+final pra trazer todos os pares até a data de hoje (os majors pararam no snapshot de set/2026,
+os cruzados foram completando ao longo de set-out/2026).**
 
-## 1. Histórico de candles M5 — Dukascopy (COMPLETO para os 8 majors)
+## 1. Histórico de candles M5 — Dukascopy (COMPLETO para os 28 pares)
+
+Verificação de integridade nos 28 pares (2026-10-04): **0 candles com preço zero/negativo, 0 com
+OHLC inconsistente**, em todo o dataset. `data_gaps`: 58 registros, todos fechamento de mercado
+(Ano Novo + um Natal que caiu em fim de semana longo em 2023) — nenhum buraco de dado real.
+Os 20 cruzados foram baixados em passadas sucessivas de `--resume` (cada par para sozinho numa
+hora que falha após ~15min de retry, sem deixar buraco mudo, e retoma na passada seguinte — por
+isso o backfill "falhou" dezenas de vezes no log: é o comportamento esperado, não erro).
+
+### Números dos 8 majors (congelados em 2026-09; serão atualizados pelo top-up)
 
 Fonte: tick history público da Dukascopy (`datafeed.dukascopy.com`), decodificado do formato
 `.bi5` (LZMA + registros de 20 bytes) e reamostrado para M5 localmente, usando **preço mid
