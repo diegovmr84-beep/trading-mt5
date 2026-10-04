@@ -12,3 +12,4 @@ currency-strength-ea/data/*.db-shm
 # o CSV/MD gerado com dados reais não)
 currency-strength-ea/reports/spread_por_par_sessao.csv
 currency-strength-ea/reports/spread_por_par_sessao.md
+currency-strength-ea/reports/force_index_a_vs_c.md

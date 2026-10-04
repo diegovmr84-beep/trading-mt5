@@ -12,7 +12,7 @@ def test_schema_creates_all_tables(tmp_path):
         r[0]
         for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    assert {"symbols", "candles_m5", "spread_samples", "data_gaps"} <= tables
+    assert {"symbols", "candles_m5", "spread_samples", "data_gaps", "force_index"} <= tables
     conn.close()
 
 
@@ -71,4 +71,22 @@ def test_delete_data_gaps_for_symbol(tmp_path):
 
     remaining = conn.execute("SELECT symbol_id, note FROM data_gaps").fetchall()
     assert remaining == [(other_sid, "c")]
+    conn.close()
+
+
+def test_insert_force_index_is_upsert_safe(tmp_path):
+    conn = db.connect(tmp_path / "test.db")
+    db.insert_force_index(conn, [(1704067200, "daily", "EUR", 0.001, 1.0)])
+    db.insert_force_index(conn, [(1704067200, "daily", "EUR", 0.002, 2.0)])  # mesma PK, regrava
+    rows = conn.execute("SELECT force_a, rank_c FROM force_index").fetchall()
+    assert rows == [(0.002, 2.0)]
+    conn.close()
+
+
+def test_delete_force_index_for_variant(tmp_path):
+    conn = db.connect(tmp_path / "test.db")
+    db.insert_force_index(conn, [(1, "daily", "EUR", 0.1, 1.0), (1, "session", "EUR", 0.2, 1.0)])
+    db.delete_force_index_for_variant(conn, "daily")
+    remaining = conn.execute("SELECT variant FROM force_index").fetchall()
+    assert remaining == [("session",)]
     conn.close()

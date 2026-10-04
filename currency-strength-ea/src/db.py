@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS data_gaps (
     gap_end_utc   INTEGER NOT NULL,
     note          TEXT
 );
+
+-- Fase 2: índice de força por moeda (src/force_index.py). `variant` é a
+-- janela de cálculo do retorno (daily/session/overlap, src/windows.py) —
+-- as três convivem na mesma tabela, a escolha entre elas é da Fase 4, não
+-- feita aqui. `force_a` = Método A (média simples dos retornos
+-- sinalizados); `rank_c` = Método C (ranking 1=mais forte..8=mais fraco),
+-- NULL quando a moeda não tinha nenhum par disponível no timestamp.
+CREATE TABLE IF NOT EXISTS force_index (
+    ts_utc    INTEGER NOT NULL,
+    variant   TEXT NOT NULL,
+    currency  TEXT NOT NULL,
+    force_a   REAL,
+    rank_c    REAL,
+    PRIMARY KEY (ts_utc, variant, currency)
+);
+
+CREATE INDEX IF NOT EXISTS idx_force_variant_currency ON force_index (variant, currency);
 """
 
 
@@ -154,3 +171,22 @@ def insert_data_gap(
         (symbol_id, gap_start_utc, gap_end_utc, note),
     )
     conn.commit()
+
+
+def delete_force_index_for_variant(conn: sqlite3.Connection, variant: str) -> None:
+    conn.execute("DELETE FROM force_index WHERE variant = ?", (variant,))
+    conn.commit()
+
+
+def insert_force_index(conn: sqlite3.Connection, rows: list[tuple]) -> int:
+    """rows: (ts_utc, variant, currency, force_a, rank_c). Upsert-safe —
+    recalcular uma variante e regravar não duplica nem falha."""
+    conn.executemany(
+        "INSERT INTO force_index (ts_utc, variant, currency, force_a, rank_c) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(ts_utc, variant, currency) DO UPDATE SET "
+        "force_a=excluded.force_a, rank_c=excluded.rank_c",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
