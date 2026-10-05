@@ -7,5 +7,10 @@ MetaTrader5
 # dukascopy_smoke_test.py) — este caminho não depende de MT5/Windows.
 requests
 
+# Fases 2-4 (índice de força, sinais, backtest, estatística)
+numpy
+pandas
+scipy
+
 # Testes (rodam em qualquer SO, não dependem do MetaTrader5 nem de rede)
 pytest
