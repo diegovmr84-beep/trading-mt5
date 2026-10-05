@@ -93,6 +93,15 @@ def main() -> None:
              "resultado cruzar para o negativo. Take atingido em ~48% dos trades, stop em ~20%, saída por tempo em ~31%. "
              "A relação stop/take média é 1,8 — efeito dos quantis-padrão (q_take 0,5 / q_stop 0,75) definidos antes de ver o dado.\n")
 
+    d5 = sweep[(sweep.config == "daily_k5") & (sweep.scenario == cfg.PRIMARY_SCENARIO)].iloc[0]
+    L.append(
+        f"**Observação (não acionável):** nas janelas `daily` o retorno é negativo "
+        f"(`daily_k5`: t = {d5['t']:.2f}, p = {d5['p_two']:.3f}), o que sugere reversão, e não continuação, "
+        f"no horizonte de 3h. Esse p-valor **não sobrevive ao Bonferroni** (α crítico {cfg.ALPHA_BONFERRONI:.5f}) e "
+        "inverter o sinal agora, depois de ver o resultado, seria data-snooping. Só vale como **hipótese a "
+        "pré-registrar** e testar uma única vez no out-of-sample intocado.\n"
+    )
+
     L.append("## 3. Configuração escolhida (regra pré-registrada) e walk-forward\n")
     L.append(f"Regra: maior t entre as configurações com ≥ {cfg.N_MIN_TRADES} trades, cenário {cfg.PRIMARY_SCENARIO}. "
              f"Escolhida: **{chosen['config']}** — n={chosen['n']}, líquido {_f(chosen['mean_bps'])} bps, "

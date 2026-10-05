@@ -37,6 +37,8 @@ Expectativa líquida por trade em bps (retorno log × 10⁴), t robusto a cluste
 
 Diagnóstico só com o desenvolvimento (cenário realista, as 9 configurações): o retorno **bruto** (antes de custo) fica entre −6,5 e +1,6 bps por trade conforme a configuração, ou seja, o sinal **não mostra edge antes de custo**; o custo (1,3 bps no otimista, ~2,5 no realista) só faz o resultado cruzar para o negativo. Take atingido em ~48% dos trades, stop em ~20%, saída por tempo em ~31%. A relação stop/take média é 1,8 — efeito dos quantis-padrão (q_take 0,5 / q_stop 0,75) definidos antes de ver o dado.
 
+**Observação (não acionável):** nas janelas `daily` o retorno é negativo (`daily_k5`: t = -2.49, p = 0.014), o que sugere reversão, e não continuação, no horizonte de 3h. Esse p-valor **não sobrevive ao Bonferroni** (α crítico 0.00079) e inverter o sinal agora, depois de ver o resultado, seria data-snooping. Só vale como **hipótese a pré-registrar** e testar uma única vez no out-of-sample intocado.
+
 ## 3. Configuração escolhida (regra pré-registrada) e walk-forward
 
 Regra: maior t entre as configurações com ≥ 100 trades, cenário realista. Escolhida: **session_k6** — n=533, líquido -0.98 bps, t=-0.65, p=0.520, -0.021 R. É a "menos ruim", não uma configuração com edge.
