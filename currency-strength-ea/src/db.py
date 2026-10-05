@@ -78,6 +78,55 @@ CREATE TABLE IF NOT EXISTS force_index (
 );
 
 CREATE INDEX IF NOT EXISTS idx_force_variant_currency ON force_index (variant, currency);
+
+-- Fase 3: eventos de sinal candidatos (src/signals.py). Um evento = ONSET de
+-- sinal num par (não cada candle em que o sinal persiste). `param_set` nomeia
+-- a combinação de parâmetros (k/z/horizonte/quantis/spread) — várias
+-- combinações convivem na tabela para a varredura da Fase 4. `period` é
+-- 'dev', 'val' ou 'embargo' segundo o corte 70/30 (src/split.py; embargo = evento cuja janela de resultado cruza o corte — fora de calibração E de validação); `spread_ok` é o
+-- filtro de pares operáveis (src/spread_model.py). Nenhuma coluna aqui é
+-- P&L: o resultado dos trades só existe a partir da Fase 4.
+CREATE TABLE IF NOT EXISTS signal_candidates (
+    param_set      TEXT NOT NULL,
+    variant        TEXT NOT NULL,
+    ts_utc         INTEGER NOT NULL,
+    pair           TEXT NOT NULL,
+    direction      INTEGER NOT NULL,   -- +1 long (compra o par), -1 short
+    strong_ccy     TEXT NOT NULL,
+    weak_ccy       TEXT NOT NULL,
+    n_strong       INTEGER,
+    n_weak         INTEGER,
+    z_pair         REAL,
+    force_gap      REAL,
+    rank_c_strong  REAL,
+    rank_c_weak    REAL,
+    priority       INTEGER,
+    sigma1         REAL,
+    bucket         INTEGER,
+    take_rel       REAL,
+    stop_rel       REAL,
+    session        TEXT,
+    spread_rel     REAL,
+    spread_ok      INTEGER,
+    period         TEXT NOT NULL,
+    PRIMARY KEY (param_set, variant, ts_utc, pair)
+);
+
+-- Fase 3: tabela de calibração stop/take (src/calibration.py), calibrada SÓ
+-- com eventos de desenvolvimento. take_z/stop_z em unidades de
+-- sigma1*sqrt(horizonte).
+CREATE TABLE IF NOT EXISTS stop_take_calibration (
+    param_set  TEXT NOT NULL,
+    variant    TEXT NOT NULL,
+    bucket     INTEGER NOT NULL,
+    z_lo       REAL,
+    z_hi       REAL,
+    take_z     REAL,
+    stop_z     REAL,
+    n_events   INTEGER,
+    cutoff_ts  INTEGER NOT NULL,       -- corte dev/validação usado
+    PRIMARY KEY (param_set, variant, bucket)
+);
 """
 
 
@@ -171,6 +220,37 @@ def insert_data_gap(
         (symbol_id, gap_start_utc, gap_end_utc, note),
     )
     conn.commit()
+
+
+def replace_signal_candidates(
+    conn: sqlite3.Connection, param_set: str, variant: str, rows: list[tuple]
+) -> int:
+    """Substitui TODOS os eventos de (param_set, variant) pelos `rows` dados —
+    recalcular não deixa lixo da execução anterior."""
+    conn.execute("DELETE FROM signal_candidates WHERE param_set = ? AND variant = ?", (param_set, variant))
+    conn.executemany(
+        "INSERT INTO signal_candidates (param_set, variant, ts_utc, pair, direction, strong_ccy, "
+        "weak_ccy, n_strong, n_weak, z_pair, force_gap, rank_c_strong, rank_c_weak, priority, "
+        "sigma1, bucket, take_rel, stop_rel, session, spread_rel, spread_ok, period) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def replace_stop_take_calibration(
+    conn: sqlite3.Connection, param_set: str, variant: str, rows: list[tuple]
+) -> int:
+    """rows: (bucket, z_lo, z_hi, take_z, stop_z, n_events, cutoff_ts)."""
+    conn.execute("DELETE FROM stop_take_calibration WHERE param_set = ? AND variant = ?", (param_set, variant))
+    conn.executemany(
+        "INSERT INTO stop_take_calibration (param_set, variant, bucket, z_lo, z_hi, take_z, stop_z, "
+        "n_events, cutoff_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(param_set, variant, *r) for r in rows],
+    )
+    conn.commit()
+    return len(rows)
 
 
 def delete_force_index_for_variant(conn: sqlite3.Connection, variant: str) -> None:

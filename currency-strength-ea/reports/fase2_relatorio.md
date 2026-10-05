@@ -79,11 +79,10 @@ todas as variantes (ainda assim pequena: ~0,04-0,06 posições de rank em média
 
 ## Limitações / decisões que precisam da sua revisão
 
-- [ ] Fórmula do Método C (placar de vitórias/derrotas via sinal, não magnitude) é minha
-      interpretação de "mesmo cálculo de base, convertido em ranking ordinal" (Seção 3.1) — revisar
-      se é isso que se pretendia, ou se "ranking" deveria vir direto de ordenar as magnitudes do
-      Método A (nesse caso A e C nunca divergiriam por construção, o que esvaziaria o propósito de
-      checagem de robustez do método).
+- [x] Fórmula do Método C (placar de vitórias/derrotas via sinal, não magnitude) é minha
+      interpretação de "mesmo cálculo de base, convertido em ranking ordinal" (Seção 3.1).
+      **Decidido pelo usuário em 2026-10-05: Leitura 1 (placar de sinais), mantida.** A
+      alternativa (ordenar as magnitudes do A) deixaria A e C idênticos por construção.
 - [ ] Linhas onde uma moeda não tem nenhum par disponível (feriado afetando parcialmente o
       universo) ficam com `force_a`/`rank_c` nulos para aquela moeda naquele timestamp — revisar se
       a Fase 3/4 deve tratar isso como "sem sinal" ou exigir as 8 moedas completas.
