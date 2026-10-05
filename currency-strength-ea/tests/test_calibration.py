@@ -115,7 +115,13 @@ def test_filtro_de_spread_compara_com_distancia_do_take(tmp_path):
     conn = db.connect(tmp_path / "t.db")
     sid = db.upsert_symbol(conn, "EURUSD", "EUR", "USD")
     # spread relativo constante = 0.0002/1.1 ~ 1.82e-4 em 'london'
-    rows = [(sid, 1_700_000_000 + i, "london", 1.0999, 1.1001, 0.0002) for i in range(20)]
+    terca_9h = int(pd.Timestamp("2024-01-02T09:00", tz="UTC").timestamp())  # mercado aberto, fora do rollover
+    sabado = int(pd.Timestamp("2024-01-06T09:00", tz="UTC").timestamp())     # mercado fechado: cotação congelada
+    rollover = int(pd.Timestamp("2024-01-02T22:00", tz="UTC").timestamp())   # 17:00 NY (inverno) = 22:00 UTC
+    rows = [(sid, terca_9h + i * 30, "london", 1.0999, 1.1001, 0.0002) for i in range(20)]
+    # amostras absurdamente largas em fim de semana e rollover NÃO podem entrar na tabela
+    rows += [(sid, sabado + i * 30, "london", 1.0900, 1.1100, 0.02) for i in range(20)]
+    rows += [(sid, rollover + i * 30, "london", 1.0900, 1.1100, 0.02) for i in range(20)]
     db.insert_spread_samples(conn, rows)
     table = spread_table(conn, 0.75)
     assert np.isclose(table[("EURUSD", "london")], 0.0002 / 1.1)
@@ -132,4 +138,9 @@ def test_filtro_de_spread_compara_com_distancia_do_take(tmp_path):
     assert list(out.session) == ["london"] * 3
     # 0.25*0.002 = 5e-4 >= 1.82e-4 ok; 0.25*0.0003 = 7.5e-5 < 1.82e-4 reprova; sem amostra reprova
     assert list(out.spread_ok) == [True, False, False]
+
+    # Mesmo com take folgado, evento no rollover nunca é operável.
+    ev_roll = pd.DataFrame({"ts": [pd.Timestamp("2024-01-02T22:00", tz="UTC")], "pair": ["EURUSD"], "take_rel": [0.05]})
+    out = apply_spread_filter(ev_roll, table.rename_axis(["pair", "session"]), SpreadParams())
+    assert bool(out.rollover.iloc[0]) and not bool(out.spread_ok.iloc[0])
     conn.close()

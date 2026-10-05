@@ -90,24 +90,30 @@ uma conclusão — `q_take`, `q_stop`, horizonte e nº de faixas são varridos n
 observa-se que o MAE no quantil 0,75 supera o de um passeio aleatório (~1,15): a volatilidade
 logo após um movimento grande é maior que a média recente — esperado, e vale ter em mente.
 
-### 6. Filtro de spread: spread relativo ≤ fração da distância do take
+### 6. Filtro de spread: spread relativo ≤ fração da distância do take, fora do rollover
 `spread_rel(par, sessão) ≤ 0,25 · take_rel`, com `spread_rel` = quantil 0,75 do
-`(ask−bid)/mid` amostrado na Fase 1 por (par, sessão). Par/sessão sem amostra → reprova
-(sem dado de custo, não assume viabilidade). Modelado dentro da geração do sinal, não só como
-filtro de execução (Seção 5).
+`(ask−bid)/mid` amostrado na Fase 1 por (par, sessão), **e** evento fora do rollover (16h-19h de
+Nova York, com horário de verão dos EUA — `src/market_hours.py`). Par/sessão sem amostra →
+reprova. Modelado dentro da geração do sinal, não só como filtro de execução (Seção 5).
 
-- **Morde onde a Seção 5 previu, mas pouco**: considerando todos os 7.207 eventos, os pares que
-  mais reprovam são `GBPNZD` (79% reprovados, só 24 eventos) e `AUDNZD` (16%, 25 eventos) —
-  spread alto frente ao movimento esperado de pares de baixa volatilidade —, seguidos de
-  `CHFJPY` e `AUDJPY` (~6%), `NZDCHF`/`GBPJPY` (~3%). Os demais passam quase sempre. Os pares
-  problemáticos têm poucos eventos, então o efeito agregado é pequeno.
-- **É fraco nos defaults** (~98% dos eventos passam): numa janela de 3h o movimento esperado é
-  muito maior que o spread da maioria dos pares. `max_spread_to_take` e o quantil do spread são os
-  parâmetros que a Fase 4 varre nos 3 cenários de custo.
-- **Limitação assumida**: spread amostrado só em set-out/2026, aplicado a todo o histórico
-  2020-2026. Subestima o custo em regimes de stress. Além disso, esse spread de 2026 cai todo no
-  período de **validação** do split; spread não depende do resultado da estratégia (não vaza
-  edge), mas é uma exceção ao "validação nunca é vista" — registrada aqui por transparência.
+> **Correção feita na Fase 4 (análise de operabilidade, `reports/spread_operabilidade.md`)**: a
+> primeira versão desta tabela usava todas as amostras. 33,5% delas tinham sido gravadas com o
+> **mercado fechado** (fim de semana, cotação congelada) e outra parte caía no **rollover**, onde
+> o spread explode (EURNZD ~28 pips, GBPJPY ~21). Isso inflava o spread de forma arbitrária e
+> fazia pares como GBPNZD parecerem inviáveis (79% reprovados) por um artefato. Agora a tabela só
+> usa mercado aberto fora do rollover, e o rollover é janela proibida. Os eventos candidatos
+> (7.207) não mudaram; mudou só `spread_ok` (de ~98% para ~95% de aprovação, agora reprovando
+> principalmente por rollover). A tabela de contagens abaixo já reflete a versão corrigida.
+
+- **Achado que limita este filtro**: fora do rollover o spread de cada par é **constante** em
+  todas as horas — não varia entre Tóquio/Londres/NY. Indica spread fixo/simulado da conta Trial.
+  A tabela é um **piso** de custo, não o spread real de execução. A Fase 4 trata isso com
+  cenários de custo (multiplicadores sobre este piso).
+- **Fraco nos defaults** (~95% passam): em 3h o movimento esperado é muito maior que o spread
+  de todos os pares em horário normal (custo/take entre 3,5% e 14%).
+- **Limitações assumidas**: spread só amostrado em set-out/2026, aplicado a 2020-2026 (subestima
+  stress); e esse spread cai todo no período de **validação** do split 70/30 (não depende do
+  resultado da estratégia, então não vaza edge, mas é uma exceção registrada).
 
 ## Resultado: eventos candidatos (apenas contagens — nenhum resultado de trade)
 
@@ -116,15 +122,15 @@ Parâmetros: `z_crit = 2,0`, horizonte 36, `q_take = 0,5`, `q_stop = 0,75`, quan
 
 | janela | k | eventos | dev | val | passam no spread | simultâneos (méd / máx) |
 |---|---|---|---|---|---|---|
-| daily | 5 | 843 | 568 | 275 | 98% | 1,36 / 7 |
-| daily | 6 | 300 | 197 | 103 | 98% | 1,23 / 4 |
-| daily | 7 | 51 | 38 | 13 | 100% | 1,00 / 1 |
-| session | 5 | 2.696 | 1.927 | 769 | 98% | 1,44 / 9 |
-| session | 6 | 797 | 570 | 227 | 99% | 1,27 / 4 |
-| session | 7 | 126 | 86 | 40 | 100% | 1,00 / 1 |
-| overlap | 5 | 1.814 | 1.325 | 489 | 98% | 1,42 / 7 |
-| overlap | 6 | 507 | 361 | 146 | 100% | 1,27 / 4 |
-| overlap | 7 | 73 | 44 | 29 | 100% | 1,00 / 1 |
+| daily | 5 | 843 | 568 | 275 | 92% | 1,39 / 7 |
+| daily | 6 | 300 | 197 | 103 | 94% | 1,23 / 4 |
+| daily | 7 | 51 | 38 | 13 | 96% | 1,00 / 1 |
+| session | 5 | 2.696 | 1.927 | 769 | 96% | 1,47 / 9 |
+| session | 6 | 797 | 570 | 227 | 97% | 1,27 / 4 |
+| session | 7 | 126 | 86 | 40 | 95% | 1,00 / 1 |
+| overlap | 5 | 1.814 | 1.325 | 489 | 95% | 1,45 / 7 |
+| overlap | 6 | 507 | 361 | 146 | 95% | 1,27 / 4 |
+| overlap | 7 | 73 | 44 | 29 | 92% | 1,00 / 1 |
 
 O número de posições simultâneas é dinâmico (resultado do filtro, não fixado), como a Seção 5
 pede: de 0 a 9 candidatos por instante.
@@ -146,13 +152,13 @@ pede: de 0 a 9 candidatos por instante.
 - **Assimetria long/short** (ex.: 1.076 shorts × 738 longs em overlap k=5) reflete a convenção
   base/quote e os regimes de moeda do período, não um viés do código; não foi investigada.
 
-## Decisões que preciso de você antes da Fase 4
+## Decisões (aprovadas pelo usuário em 2026-10-05)
 
-- [ ] Definição de "significativo" (z contra volatilidade recente, `z_crit` varrido) está ok, ou
-      prefere outro teste?
-- [ ] `require_pair_significance` ligado (o par negociado também precisa de |z| > z_crit) — mantém?
-- [ ] Normalizar `sigma1` por hora do dia (corrige a heterocedasticidade acima, +parâmetros) —
-      vale fazer agora ou deixar como achado para a Fase 4?
-- [ ] Spread medido só em 2026 e aplicado a todo o histórico: aceita essa aproximação para o
-      backtest (com os 3 cenários de custo), sabendo que ela subestima custo em regimes de stress?
-- [ ] Horizonte de 3h (36 candles) para a calibração stop/take — ponto de partida aceitável?
+- [x] Definição de "significativo" (z contra volatilidade recente, `z_crit` varrido na Fase 4).
+- [x] `require_pair_significance` ligado.
+- [x] Normalização de `sigma1` por hora do dia: **não implementada** — fica como achado/limitação a
+      reavaliar na Fase 4 (interpretação minha da aprovação; adiciona parâmetros).
+- [x] Spread medido só em 2026 aplicado a todo o histórico — **aprovado, com a ressalva nova**: o
+      spread da Trial é constante (piso de custo) e a tabela original estava contaminada por fim de
+      semana/rollover (corrigido). A Fase 4 usa cenários de custo com multiplicadores.
+- [x] Horizonte de 3h (36 candles) para a calibração stop/take.
