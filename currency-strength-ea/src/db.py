@@ -127,6 +127,37 @@ CREATE TABLE IF NOT EXISTS stop_take_calibration (
     cutoff_ts  INTEGER NOT NULL,       -- corte dev/validação usado
     PRIMARY KEY (param_set, variant, bucket)
 );
+
+-- Fase 4: trades simulados (src/backtest.py). `run`: 'dev_sweep' (as 9
+-- configurações, só desenvolvimento), 'walk_forward' ou 'oos' (configuração
+-- escolhida, validação). Retornos em log; net_ret = gross_ret - cost_ret.
+CREATE TABLE IF NOT EXISTS backtest_trades (
+    run          TEXT NOT NULL,
+    config       TEXT NOT NULL,
+    scenario     TEXT NOT NULL,
+    period       TEXT NOT NULL,
+    ts_utc       INTEGER NOT NULL,
+    pair         TEXT NOT NULL,
+    direction    INTEGER,
+    strong_ccy   TEXT,
+    weak_ccy     TEXT,
+    take_rel     REAL,
+    stop_rel     REAL,
+    exit_reason  TEXT,
+    bars_held    INTEGER,
+    gross_ret    REAL,
+    cost_ret     REAL,
+    net_ret      REAL
+);
+CREATE INDEX IF NOT EXISTS idx_bt_run ON backtest_trades (run, config, scenario);
+
+-- Fase 4: registro de abertura do período de validação. O out-of-sample só pode
+-- ser aberto UMA vez; scripts/run_validation.py recusa rodar se já houver linha.
+CREATE TABLE IF NOT EXISTS validation_lock (
+    opened_at TEXT NOT NULL,
+    config    TEXT NOT NULL,
+    note      TEXT
+);
 """
 
 
